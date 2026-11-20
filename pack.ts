@@ -92,18 +92,36 @@ function inflateExact(buf: Buffer, offset: number, expectedSize: number): { data
       return null;
     }
   };
-  let lo = 1;
-  let hi = buf.length - offset;
-  // First confirm the whole remainder works; then bisect for the minimum.
-  if (tryLen(hi) === null) throw new Error('corrupt zlib stream in pack');
-  while (lo < hi) {
+  // Bracket the stream's end by doubling from a size guess, then bisect
+  // inside the bracket for the smallest prefix that inflates fully.
+  const remaining = buf.length - offset;
+  let hi = Math.min(remaining, Math.max(64, expectedSize + 16));
+  while (tryLen(hi) === null) {
+    if (hi >= remaining) throw new Error('corrupt zlib stream in pack');
+    hi = Math.min(remaining, hi * 2);
+  }
+  let lo = Math.max(1, Math.floor(hi / 2));
+  if (tryLen(lo) !== null) {
+    // The end sits inside the first bracket already: bisect [1, lo].
+    let a = 1;
+    let b = lo;
+    while (a < b) {
+      const mid = Math.floor((a + b) / 2);
+      if (tryLen(mid) !== null) b = mid;
+      else a = mid + 1;
+    }
+    const data = tryLen(a);
+    if (data === null) throw new Error('corrupt zlib stream in pack');
+    return { data, next: offset + a };
+  }
+  while (lo + 1 < hi) {
     const mid = Math.floor((lo + hi) / 2);
     if (tryLen(mid) !== null) hi = mid;
-    else lo = mid + 1;
+    else lo = mid;
   }
-  const data = tryLen(lo);
+  const data = tryLen(hi);
   if (data === null) throw new Error('corrupt zlib stream in pack');
-  return { data, next: offset + lo };
+  return { data, next: offset + hi };
 }
 
 /** Apply a git delta (copy/insert instruction stream) to a base object. */
@@ -270,7 +288,7 @@ export function buildPack(shas: string[]): Buffer {
       headerBytes.push(b);
     }
     parts.push(Buffer.from(headerBytes));
-    parts.push(deflateSync(obj.data));
+    parts.push(deflateSync(obj.data, { level: 1 }));
   }
   const body = Buffer.concat(parts);
   const trailer = createHash('sha1').update(body).digest();

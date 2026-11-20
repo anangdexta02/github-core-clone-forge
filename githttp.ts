@@ -91,15 +91,16 @@ function advertiseV0(res: ServerResponse, repo: Repo, service: 'git-upload-pack'
 // Object-set computation for fetch
 // ---------------------------------------------------------------------------
 
-/** Tree closure (trees + blobs) under a tree sha, added to `out`. */
-function addTreeClosure(treeSha: string, out: Set<string>): void {
+/** Tree closure (trees + blobs) under a tree sha, added to `out`/`order`. */
+function addTreeClosure(treeSha: string, out: Set<string>, order: string[]): void {
   if (out.has(treeSha)) return;
   const obj = getObject(treeSha);
   if (!obj || obj.type !== 'tree') return;
   out.add(treeSha);
+  order.push(treeSha);
   for (const e of parseTree(obj.data)) {
-    if (e.mode === '40000') addTreeClosure(e.sha, out);
-    else out.add(e.sha);
+    if (e.mode === '40000') addTreeClosure(e.sha, out, order);
+    else if (!out.has(e.sha)) { out.add(e.sha); order.push(e.sha); }
   }
 }
 
@@ -144,9 +145,7 @@ function objectClosure(tips: string[], stopCommits: Set<string>, maxGenerations?
       if (!obj || obj.type !== 'commit') continue;
       add(sha);
       const info = parseCommit(obj.data);
-      const before = new Set(set);
-      addTreeClosure(info.tree, set);
-      for (const s of set) if (!before.has(s)) order.push(s);
+      addTreeClosure(info.tree, set, order);
       const mayDeepen = maxGenerations === undefined || generation + 1 < maxGenerations;
       if (mayDeepen && !stopCommits.has(sha)) next.push(...info.parents);
     }
